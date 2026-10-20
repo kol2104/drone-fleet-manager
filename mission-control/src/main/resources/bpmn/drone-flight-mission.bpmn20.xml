@@ -1,0 +1,297 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL"
+                 xmlns:bpmndi="http://www.omg.org/spec/BPMN/20100524/DI"
+                 xmlns:dc="http://www.omg.org/spec/DD/20100524/DC"
+                 xmlns:di="http://www.omg.org/spec/DD/20100524/DI"
+                 xmlns:zeebe="http://camunda.org/schema/zeebe/1.0"
+                 xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+                 id="Definitions_1"
+                 targetNamespace="http://bpmn.io/schema/bpmn"
+                 exporter="Camunda Modeler"
+                 exporterVersion="5.13.0">
+
+  <bpmn:process id="drone-flight-mission" name="Drone Flight Mission" isExecutable="true">
+    <bpmn:documentation>Validates a mission, reserves a registered drone, waits for its flight result, and records the outcome.</bpmn:documentation>
+
+    <bpmn:startEvent id="StartMission" name="Mission Started">
+      <bpmn:outgoing>SequenceFlow_1</bpmn:outgoing>
+    </bpmn:startEvent>
+
+    <bpmn:serviceTask id="ValidateMissionTask" name="Validate Mission Request">
+      <bpmn:documentation>Checks the variables required by the mission workers.</bpmn:documentation>
+      <bpmn:extensionElements>
+        <zeebe:taskDefinition type="validate-mission" retries="1" />
+      </bpmn:extensionElements>
+      <bpmn:incoming>SequenceFlow_1</bpmn:incoming>
+      <bpmn:outgoing>SequenceFlow_2</bpmn:outgoing>
+    </bpmn:serviceTask>
+
+    <bpmn:serviceTask id="CheckWeatherTask" name="Check Weather Conditions">
+      <bpmn:documentation>Evaluates simulated weather conditions.</bpmn:documentation>
+      <bpmn:extensionElements>
+        <zeebe:taskDefinition type="check-weather" retries="3" />
+      </bpmn:extensionElements>
+      <bpmn:incoming>SequenceFlow_2</bpmn:incoming>
+      <bpmn:outgoing>WeatherCheckToGateway</bpmn:outgoing>
+    </bpmn:serviceTask>
+
+    <bpmn:exclusiveGateway id="WeatherConditionsGateway" name="Weather conditions acceptable?" default="SequenceFlow_3">
+      <bpmn:incoming>WeatherCheckToGateway</bpmn:incoming>
+      <bpmn:outgoing>SequenceFlow_3</bpmn:outgoing>
+      <bpmn:outgoing>WeatherRejectedToAudit</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <bpmn:serviceTask id="AllocateDroneTask" name="Reserve Requested Drone">
+      <bpmn:documentation>Reserves the drone selected by the mission caller.</bpmn:documentation>
+      <bpmn:extensionElements>
+        <zeebe:taskDefinition type="allocate-drone" retries="5" />
+      </bpmn:extensionElements>
+      <bpmn:incoming>SequenceFlow_3</bpmn:incoming>
+      <bpmn:outgoing>AllocationToGateway</bpmn:outgoing>
+    </bpmn:serviceTask>
+
+    <bpmn:exclusiveGateway id="AllocationDecisionGateway" name="Drone reserved?" default="SequenceFlow_4">
+      <bpmn:incoming>AllocationToGateway</bpmn:incoming>
+      <bpmn:outgoing>SequenceFlow_4</bpmn:outgoing>
+      <bpmn:outgoing>AllocationRejectedToAudit</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <bpmn:serviceTask id="ExecuteFlightTask" name="Execute Flight Mission">
+      <bpmn:documentation>Publishes a flight command; the drone reports the result asynchronously.</bpmn:documentation>
+      <bpmn:extensionElements>
+        <zeebe:taskDefinition type="execute-flight" retries="2" />
+      </bpmn:extensionElements>
+      <bpmn:incoming>SequenceFlow_4</bpmn:incoming>
+      <bpmn:outgoing>SequenceFlow_5</bpmn:outgoing>
+    </bpmn:serviceTask>
+
+    <bpmn:eventBasedGateway id="WaitForFlightResultGateway" name="Wait for drone result">
+      <bpmn:incoming>SequenceFlow_5</bpmn:incoming>
+      <bpmn:outgoing>SequenceFlow_6</bpmn:outgoing>
+      <bpmn:outgoing>SequenceFlow_7</bpmn:outgoing>
+    </bpmn:eventBasedGateway>
+
+    <bpmn:intermediateCatchEvent id="FlightResultReceived" name="Flight result received">
+      <bpmn:incoming>SequenceFlow_6</bpmn:incoming>
+      <bpmn:outgoing>SequenceFlow_8</bpmn:outgoing>
+      <bpmn:messageEventDefinition messageRef="Message_FlightResult" />
+    </bpmn:intermediateCatchEvent>
+
+    <bpmn:intermediateCatchEvent id="FlightResultTimeout" name="Flight result timeout">
+      <bpmn:incoming>SequenceFlow_7</bpmn:incoming>
+      <bpmn:outgoing>SequenceFlow_9</bpmn:outgoing>
+      <bpmn:timerEventDefinition>
+        <bpmn:timeDuration xsi:type="bpmn:tFormalExpression">PT15M</bpmn:timeDuration>
+      </bpmn:timerEventDefinition>
+    </bpmn:intermediateCatchEvent>
+
+    <bpmn:serviceTask id="ReleaseDroneTask" name="Release Drone">
+      <bpmn:documentation>Releases the Device Registry reservation using the drone-reported result.</bpmn:documentation>
+      <bpmn:extensionElements>
+        <zeebe:taskDefinition type="release-drone" retries="3" />
+      </bpmn:extensionElements>
+      <bpmn:incoming>SequenceFlow_8</bpmn:incoming>
+      <bpmn:incoming>SequenceFlow_9</bpmn:incoming>
+      <bpmn:outgoing>SequenceFlow_10</bpmn:outgoing>
+    </bpmn:serviceTask>
+
+    <bpmn:serviceTask id="AuditLogTask" name="Log Mission to Audit">
+      <bpmn:documentation>Writes the terminal mission outcome to Elasticsearch.</bpmn:documentation>
+      <bpmn:extensionElements>
+        <zeebe:taskDefinition type="audit-mission-log" retries="3" />
+      </bpmn:extensionElements>
+      <bpmn:incoming>WeatherRejectedToAudit</bpmn:incoming>
+      <bpmn:incoming>AllocationRejectedToAudit</bpmn:incoming>
+      <bpmn:incoming>SequenceFlow_10</bpmn:incoming>
+      <bpmn:outgoing>SequenceFlow_11</bpmn:outgoing>
+    </bpmn:serviceTask>
+
+    <bpmn:endEvent id="MissionCompleted" name="Mission Completed">
+      <bpmn:incoming>SequenceFlow_11</bpmn:incoming>
+    </bpmn:endEvent>
+
+    <bpmn:sequenceFlow id="SequenceFlow_1" sourceRef="StartMission" targetRef="ValidateMissionTask" />
+    <bpmn:sequenceFlow id="SequenceFlow_2" sourceRef="ValidateMissionTask" targetRef="CheckWeatherTask" />
+    <bpmn:sequenceFlow id="WeatherCheckToGateway" sourceRef="CheckWeatherTask" targetRef="WeatherConditionsGateway" />
+    <bpmn:sequenceFlow id="SequenceFlow_3" sourceRef="WeatherConditionsGateway" targetRef="AllocateDroneTask" />
+    <bpmn:sequenceFlow id="WeatherRejectedToAudit" sourceRef="WeatherConditionsGateway" targetRef="AuditLogTask">
+      <bpmn:conditionExpression xsi:type="bpmn:tFormalExpression">=weatherOk = false</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="AllocationToGateway" sourceRef="AllocateDroneTask" targetRef="AllocationDecisionGateway" />
+    <bpmn:sequenceFlow id="SequenceFlow_4" sourceRef="AllocationDecisionGateway" targetRef="ExecuteFlightTask" />
+    <bpmn:sequenceFlow id="AllocationRejectedToAudit" sourceRef="AllocationDecisionGateway" targetRef="AuditLogTask">
+      <bpmn:conditionExpression xsi:type="bpmn:tFormalExpression">=allocationSucceeded = false</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="SequenceFlow_5" sourceRef="ExecuteFlightTask" targetRef="WaitForFlightResultGateway" />
+    <bpmn:sequenceFlow id="SequenceFlow_6" sourceRef="WaitForFlightResultGateway" targetRef="FlightResultReceived" />
+    <bpmn:sequenceFlow id="SequenceFlow_7" sourceRef="WaitForFlightResultGateway" targetRef="FlightResultTimeout" />
+    <bpmn:sequenceFlow id="SequenceFlow_8" sourceRef="FlightResultReceived" targetRef="ReleaseDroneTask" />
+    <bpmn:sequenceFlow id="SequenceFlow_9" sourceRef="FlightResultTimeout" targetRef="ReleaseDroneTask" />
+    <bpmn:sequenceFlow id="SequenceFlow_10" sourceRef="ReleaseDroneTask" targetRef="AuditLogTask" />
+    <bpmn:sequenceFlow id="SequenceFlow_11" sourceRef="AuditLogTask" targetRef="MissionCompleted" />
+  </bpmn:process>
+
+  <bpmn:message id="Message_FlightResult" name="flight-result">
+    <bpmn:extensionElements>
+      <zeebe:subscription correlationKey="=flightCorrelationId" />
+    </bpmn:extensionElements>
+  </bpmn:message>
+
+  <bpmndi:BPMNDiagram id="BPMNDiagram_1">
+    <bpmndi:BPMNPlane id="BPMNPlane_1" bpmnElement="drone-flight-mission">
+      <bpmndi:BPMNShape id="StartMission_di" bpmnElement="StartMission">
+        <dc:Bounds x="50" y="100" width="36" height="36" />
+        <bpmndi:BPMNLabel>
+          <dc:Bounds x="76" y="136" width="84" height="14" />
+        </bpmndi:BPMNLabel>
+      </bpmndi:BPMNShape>
+
+      <bpmndi:BPMNShape id="ValidateMissionTask_di" bpmnElement="ValidateMissionTask">
+        <dc:Bounds x="120" y="80" width="120" height="80" />
+      </bpmndi:BPMNShape>
+
+      <bpmndi:BPMNShape id="CheckWeatherTask_di" bpmnElement="CheckWeatherTask">
+        <dc:Bounds x="290" y="80" width="120" height="80" />
+        <bpmndi:BPMNLabel>
+          <dc:Bounds x="200" y="110" width="100" height="27" />
+        </bpmndi:BPMNLabel>
+      </bpmndi:BPMNShape>
+
+      <bpmndi:BPMNShape id="WeatherConditionsGateway_di" bpmnElement="WeatherConditionsGateway">
+        <dc:Bounds x="450" y="95" width="50" height="50" />
+      </bpmndi:BPMNShape>
+
+      <bpmndi:BPMNShape id="AllocateDroneTask_di" bpmnElement="AllocateDroneTask">
+        <dc:Bounds x="550" y="80" width="120" height="80" />
+        <bpmndi:BPMNLabel>
+          <dc:Bounds x="460" y="110" width="100" height="27" />
+        </bpmndi:BPMNLabel>
+      </bpmndi:BPMNShape>
+
+      <bpmndi:BPMNShape id="AllocationDecisionGateway_di" bpmnElement="AllocationDecisionGateway">
+        <dc:Bounds x="700" y="95" width="50" height="50" />
+      </bpmndi:BPMNShape>
+
+      <bpmndi:BPMNShape id="ExecuteFlightTask_di" bpmnElement="ExecuteFlightTask">
+        <dc:Bounds x="790" y="80" width="120" height="80" />
+        <bpmndi:BPMNLabel>
+          <dc:Bounds x="800" y="110" width="100" height="27" />
+        </bpmndi:BPMNLabel>
+      </bpmndi:BPMNShape>
+
+      <bpmndi:BPMNShape id="WaitForFlightResultGateway_di" bpmnElement="WaitForFlightResultGateway">
+        <dc:Bounds x="960" y="95" width="50" height="50" />
+      </bpmndi:BPMNShape>
+
+      <bpmndi:BPMNShape id="FlightResultReceived_di" bpmnElement="FlightResultReceived">
+        <dc:Bounds x="1090" y="102" width="36" height="36" />
+      </bpmndi:BPMNShape>
+
+      <bpmndi:BPMNShape id="FlightResultTimeout_di" bpmnElement="FlightResultTimeout">
+        <dc:Bounds x="1090" y="210" width="36" height="36" />
+      </bpmndi:BPMNShape>
+
+      <bpmndi:BPMNShape id="ReleaseDroneTask_di" bpmnElement="ReleaseDroneTask">
+        <dc:Bounds x="1210" y="80" width="120" height="80" />
+      </bpmndi:BPMNShape>
+
+      <bpmndi:BPMNShape id="AuditLogTask_di" bpmnElement="AuditLogTask">
+        <dc:Bounds x="1380" y="80" width="120" height="80" />
+        <bpmndi:BPMNLabel>
+          <dc:Bounds x="1390" y="110" width="100" height="27" />
+        </bpmndi:BPMNLabel>
+      </bpmndi:BPMNShape>
+
+      <bpmndi:BPMNShape id="MissionCompleted_di" bpmnElement="MissionCompleted">
+        <dc:Bounds x="1552" y="106" width="36" height="36" />
+        <bpmndi:BPMNLabel>
+          <dc:Bounds x="1560" y="142" width="80" height="14" />
+        </bpmndi:BPMNLabel>
+      </bpmndi:BPMNShape>
+
+      <bpmndi:BPMNEdge id="SequenceFlow_1_di" bpmnElement="SequenceFlow_1">
+        <di:waypoint x="86" y="118" />
+        <di:waypoint x="120" y="120" />
+      </bpmndi:BPMNEdge>
+
+      <bpmndi:BPMNEdge id="SequenceFlow_2_di" bpmnElement="SequenceFlow_2">
+        <di:waypoint x="240" y="120" />
+        <di:waypoint x="290" y="120" />
+      </bpmndi:BPMNEdge>
+
+      <bpmndi:BPMNEdge id="WeatherCheckToGateway_di" bpmnElement="WeatherCheckToGateway">
+        <di:waypoint x="410" y="120" />
+        <di:waypoint x="450" y="120" />
+      </bpmndi:BPMNEdge>
+
+      <bpmndi:BPMNEdge id="SequenceFlow_3_di" bpmnElement="SequenceFlow_3">
+        <di:waypoint x="500" y="120" />
+        <di:waypoint x="550" y="120" />
+      </bpmndi:BPMNEdge>
+
+      <bpmndi:BPMNEdge id="WeatherRejectedToAudit_di" bpmnElement="WeatherRejectedToAudit">
+        <di:waypoint x="475" y="145" />
+        <di:waypoint x="475" y="228" />
+        <di:waypoint x="1350" y="228" />
+        <di:waypoint x="1350" y="120" />
+        <di:waypoint x="1380" y="120" />
+      </bpmndi:BPMNEdge>
+
+      <bpmndi:BPMNEdge id="AllocationToGateway_di" bpmnElement="AllocationToGateway">
+        <di:waypoint x="670" y="120" />
+        <di:waypoint x="700" y="120" />
+      </bpmndi:BPMNEdge>
+
+      <bpmndi:BPMNEdge id="AllocationRejectedToAudit_di" bpmnElement="AllocationRejectedToAudit">
+        <di:waypoint x="725" y="145" />
+        <di:waypoint x="725" y="300" />
+        <di:waypoint x="1350" y="300" />
+        <di:waypoint x="1350" y="120" />
+        <di:waypoint x="1380" y="120" />
+      </bpmndi:BPMNEdge>
+
+      <bpmndi:BPMNEdge id="SequenceFlow_4_di" bpmnElement="SequenceFlow_4">
+        <di:waypoint x="750" y="120" />
+        <di:waypoint x="790" y="120" />
+      </bpmndi:BPMNEdge>
+
+      <bpmndi:BPMNEdge id="SequenceFlow_5_di" bpmnElement="SequenceFlow_5">
+        <di:waypoint x="910" y="120" />
+        <di:waypoint x="960" y="120" />
+      </bpmndi:BPMNEdge>
+
+      <bpmndi:BPMNEdge id="SequenceFlow_6_di" bpmnElement="SequenceFlow_6">
+        <di:waypoint x="1010" y="120" />
+        <di:waypoint x="1090" y="120" />
+      </bpmndi:BPMNEdge>
+
+      <bpmndi:BPMNEdge id="SequenceFlow_7_di" bpmnElement="SequenceFlow_7">
+        <di:waypoint x="985" y="145" />
+        <di:waypoint x="985" y="228" />
+        <di:waypoint x="1090" y="228" />
+      </bpmndi:BPMNEdge>
+
+      <bpmndi:BPMNEdge id="SequenceFlow_8_di" bpmnElement="SequenceFlow_8">
+        <di:waypoint x="1126" y="120" />
+        <di:waypoint x="1210" y="120" />
+      </bpmndi:BPMNEdge>
+
+      <bpmndi:BPMNEdge id="SequenceFlow_9_di" bpmnElement="SequenceFlow_9">
+        <di:waypoint x="1126" y="228" />
+        <di:waypoint x="1160" y="228" />
+        <di:waypoint x="1160" y="120" />
+        <di:waypoint x="1210" y="120" />
+      </bpmndi:BPMNEdge>
+
+      <bpmndi:BPMNEdge id="SequenceFlow_10_di" bpmnElement="SequenceFlow_10">
+        <di:waypoint x="1330" y="120" />
+        <di:waypoint x="1380" y="120" />
+      </bpmndi:BPMNEdge>
+
+      <bpmndi:BPMNEdge id="SequenceFlow_11_di" bpmnElement="SequenceFlow_11">
+        <di:waypoint x="1500" y="120" />
+        <di:waypoint x="1552" y="124" />
+      </bpmndi:BPMNEdge>
+    </bpmndi:BPMNPlane>
+  </bpmndi:BPMNDiagram>
+</bpmn:definitions>

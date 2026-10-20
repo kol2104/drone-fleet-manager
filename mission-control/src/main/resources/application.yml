@@ -1,0 +1,47 @@
+spring:
+  application:
+    name: mission-control
+  rabbitmq:
+    host: ${RABBITMQ_HOST:localhost}
+    port: ${RABBITMQ_PORT:5672}
+    username: ${RABBITMQ_USER:guest}
+    password: ${RABBITMQ_PASSWORD:guest}
+    publisher-confirm-type: correlated
+    publisher-returns: true
+    template:
+      mandatory: true
+    listener:
+      simple:
+        default-requeue-rejected: false
+        retry:
+          enabled: true
+          initial-interval: 1s
+          max-attempts: 3
+          max-interval: 10s
+  elasticsearch:
+    uris: ${ELASTICSEARCH_URL:http://localhost:9200}
+server:
+  port: ${MISSION_CONTROL_PORT:8083}
+
+services:
+  device-registry:
+    base-url: ${DEVICE_REGISTRY_URL:http://localhost:8081}
+
+zeebe:
+  client:
+    broker:
+      gateway-address: ${ZEEBE_GATEWAY_ADDRESS:127.0.0.1:26500}
+
+logging:
+  level:
+    root: INFO
+    com.example.drone: DEBUG
+    io.camunda.zeebe: INFO
+  pattern:
+    console: "%d{HH:mm:ss.SSS} [%thread] %-5level %logger{36} - %msg%n"
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus
