@@ -1,0 +1,131 @@
+services:
+  postgres:
+    image: postgis/postgis:16-3.4
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-password}
+      POSTGRES_DB: ${POSTGRES_DB:-drone_fleet}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - drone-network
+
+  rabbitmq:
+    image: rabbitmq:3.13-management-alpine
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:-guest}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:-guest}
+    ports:
+      - "${RABBITMQ_PORT:-5672}:5672"
+      - "${RABBITMQ_MANAGEMENT_PORT:-15672}:15672"
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - drone-network
+
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.12.0
+    environment:
+      - discovery.type=single-node
+      - xpack.security.enabled=false
+      - "ES_JAVA_OPTS=${ELASTICSEARCH_JAVA_OPTS:--Xms512m -Xmx512m}"
+    ports:
+      - "${ELASTICSEARCH_PORT:-9200}:9200"
+    volumes:
+      - elasticsearch_data:/usr/share/elasticsearch/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:9200/_cluster/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 90s
+    networks:
+      - drone-network
+
+  kibana:
+    image: docker.elastic.co/kibana/kibana:8.12.0
+    ports:
+      - "${KIBANA_PORT:-5601}:5601"
+    environment:
+      - ELASTICSEARCH_HOSTS=${ELASTICSEARCH_INTERNAL_URL:-http://elasticsearch:9200}
+      - XPACK_SECURITY_ENCRYPTIONKEY=${KIBANA_SECURITY_ENCRYPTION_KEY:-drone-fleet-manager-local-security-encryption-key}
+      - XPACK_ENCRYPTEDSAVEDOBJECTS_ENCRYPTIONKEY=${KIBANA_SAVED_OBJECTS_ENCRYPTION_KEY:-drone-fleet-manager-local-saved-objects-encryption-key}
+      - XPACK_REPORTING_ENCRYPTIONKEY=${KIBANA_REPORTING_ENCRYPTION_KEY:-drone-fleet-manager-local-reporting-encryption-key}
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:5601/api/status || exit 1"]
+      interval: 10s
+      timeout: 10s
+      retries: 12
+      start_period: 120s
+    networks:
+      - drone-network
+
+  zeebe:
+    image: camunda/zeebe:8.5.0
+    ports:
+      - "${ZEEBE_GATEWAY_PORT:-26500}:26500"
+      - "${ZEEBE_MONITORING_PORT:-9600}:9600"
+    environment:
+      ZEEBE_LOG_LEVEL: ${ZEEBE_LOG_LEVEL:-info}
+      ZEEBE_BROKER_NETWORK_HOST: 0.0.0.0
+      ZEEBE_BROKER_NETWORK_PORT: 26500
+      ZEEBE_BROKER_GATEWAY_NETWORK_HOST: 0.0.0.0
+      ZEEBE_BROKER_GATEWAY_PORT: 26500
+      ZEEBE_GATEWAY_SECURITY_AUTHENTICATION_MODE: none
+      CAMUNDA_API_GRPC_INTERCEPTORS: ""
+      # Export настройки для Elasticsearch
+      ZEEBE_BROKER_EXPORTERS_ELASTICSEARCH_CLASSNAME: io.camunda.zeebe.exporter.ElasticsearchExporter
+      ZEEBE_BROKER_EXPORTERS_ELASTICSEARCH_ARGS_URL: ${ELASTICSEARCH_INTERNAL_URL:-http://elasticsearch:9200}
+      ZEEBE_BROKER_EXPORTERS_ELASTICSEARCH_ARGS_BULK_SIZE: ${ZEEBE_ES_EXPORT_BULK_SIZE:-100}
+      ZEEBE_BROKER_EXPORTERS_ELASTICSEARCH_ARGS_BULK_DELAY: ${ZEEBE_ES_EXPORT_BULK_DELAY:-5}
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+    volumes:
+      - zeebe_data:/var/lib/zeebe
+    networks:
+      - drone-network
+
+  operate:
+    image: camunda/operate:8.5.0
+    ports:
+      - "${OPERATE_PORT:-8084}:8080"
+    environment:
+      CAMUNDA_OPERATE_ELASTICSEARCH_URL: ${ELASTICSEARCH_INTERNAL_URL:-http://elasticsearch:9200}
+      CAMUNDA_OPERATE_ZEEBEELASTICSEARCH_URL: ${ELASTICSEARCH_INTERNAL_URL:-http://elasticsearch:9200}
+      CAMUNDA_OPERATE_ZEEBE_GATEWAYADDRESS: ${ZEEBE_INTERNAL_GATEWAY_ADDRESS:-zeebe:26500}
+      CAMUNDA_OPERATE_ZEEBEELASTICSEARCH_PREFIX: zeebe-record
+      CAMUNDA_OPERATE_USERNAME: ${OPERATE_USERNAME:-demo}
+      CAMUNDA_OPERATE_PASSWORD: ${OPERATE_PASSWORD:-demo}
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+      zeebe:
+        condition: service_started
+    networks:
+      - drone-network
+
+volumes:
+  postgres_data:
+  rabbitmq_data:
+  elasticsearch_data:
+  zeebe_data:
+
+networks:
+  drone-network:
+    driver: bridge
